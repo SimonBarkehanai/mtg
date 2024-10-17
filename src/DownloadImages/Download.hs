@@ -4,6 +4,7 @@
 module DownloadImages.Download (
     download,
     tokenDownload,
+    handleForgeLogLine,
     getDownloader,
     Downloader (manager),
 ) where
@@ -24,7 +25,17 @@ import Control.Monad.Trans.State.Lazy (
     put,
  )
 import Data.ByteString (stripSuffix)
-import Data.ByteString as BS (ByteString, split, toFilePath, toStrict)
+import Data.ByteString as BS (
+    ByteString,
+    elemIndex,
+    elemIndexEnd,
+    split,
+    splitAt,
+    take,
+    takeWhile,
+    toFilePath,
+    toStrict,
+ )
 import qualified Data.ByteString as BS (
     drop,
     dropWhile,
@@ -40,9 +51,9 @@ import Data.ByteString.Builder (
     toLazyByteString,
  )
 import Data.ByteString.Char8 (pack, readInt, strip, unpack)
-import qualified Data.ByteString.Char8 as C8BS (map)
+import qualified Data.ByteString.Char8 as C8BS (dropWhileEnd, map)
 import qualified Data.ByteString.Lazy as LBS (writeFile)
-import Data.Char (toLower, toUpper)
+import Data.Char (isDigit, toLower, toUpper)
 import Data.List (isPrefixOf)
 import Data.Map (Map, empty, insert)
 import qualified Data.Map as Map (lookup)
@@ -392,9 +403,10 @@ downloadImg m pd DLInfo{url = u, setDir = s, filename = n} = do
   where
     s' = map toUpper s
 
-newline, space, pipe :: Word8
+newline, space, underscore, pipe :: Word8
 newline = 10
 space = 32
+underscore = 95
 pipe = 124
 
 tokenDownload :: Downloader -> ExceptT String IO ()
@@ -445,7 +457,7 @@ tokenInfo m tokenscripts SetInfo{forge = f, sf = s, dir = d} fname = do
     info c@C.Card{C.name = n, C.layout = l} = do
         i <- get
         put $ succ i
-        let idx = if i == 0 then "" else intDec i
+        let idx = if i == 0 then "" else intDec $ succ i
             builder =
                 byteString fname
                     <> idx
@@ -513,3 +525,49 @@ downloadTok m pd DLInfo{url = u, filename = n} = do
     createDirectoryIfMissing True pd
     putStrLn $ "writing to " ++ pd </> n'
     LBS.writeFile (pd </> n') $ responseBody res
+
+handleForgeLogLine :: Downloader -> String -> ExceptT String IO ()
+handleForgeLogLine
+    d@Downloader
+        { forgeDir = fd
+        , picsDir = pd
+        , manager = m
+        , forgeMap = fm
+        }
+    s
+        | "Fetch due to missing key: " `isPrefixOf` s = handleMissing s'
+        | otherwise = pure ()
+      where
+        s' = drop 26 s
+        handleMissing ('c' : ':' : c) =
+            maybe
+                (pure ())
+                (lift . uncurry3 (downloadCard d))
+                parts
+          where
+            c' = pack c
+            end =
+                BS.elemIndex pipe c'
+                    >>= \p -> (p +) <$> BS.elemIndex space (BS.drop p c')
+            key = flip BS.take c' <$> end
+            parts = case split pipe <$> key of
+                Just [n, set] -> Just (n, set, "1")
+                Just [n, set, i] -> Just (n, set, i)
+                _ -> Nothing
+            uncurry3 f (x, y, z) = f x y z
+        handleMissing ('t' : ':' : t) =
+            maybe
+                (pure ())
+                (lift . mapM_ (downloadTok m $ pd </> "tokens") =<<)
+                info
+          where
+            t' = pack t
+            pos = elemIndexEnd underscore t'
+            (fname, set) = functorUnzip (flip BS.splitAt t' <$> pos)
+            fname' = C8BS.dropWhileEnd isDigit <$> fname
+            set' = BS.takeWhile (/= space) . BS.drop 1 <$> set
+            si = flip Map.lookup fm . C8BS.map toUpper =<< set'
+            info = tokenInfo m tokenscripts <$> si <*> fname'
+            functorUnzip xs = (fst <$> xs, snd <$> xs)
+            tokenscripts = fd </> "res" </> "tokenscripts"
+        handleMissing _ = pure ()

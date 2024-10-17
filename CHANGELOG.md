@@ -8,6 +8,18 @@ and this project adheres to the
 
 ## Unreleased
 
+## 0.1.1.0 - 2024-10-16
+
+### Fixed
+
+- Sets with separate foil boosters (e.g. 9ED) don't append numbers to file names
+- Properly name tokens with multiple printings in a single set
+- Properly uppercase sets
+
+### Added
+
+- Download missing images based on output from Forge
+
 ## 0.1.0.0 - 2024-10-07
 
 ### Added

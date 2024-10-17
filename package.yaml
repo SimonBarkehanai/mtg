@@ -1,5 +1,5 @@
 name:                mtg
-version:             0.1.0.0
+version:             0.1.1.0
 github:              "SimonBarkehanai/mtg"
 license:             BSD-3-Clause
 author:              "Simon Barkehanai"
@@ -69,6 +69,10 @@ executables:
     <<: *exe-common
     main:                DownloadTokens.hs
     source-dirs:         app/download-tok
+  log-downloader:
+    <<: *exe-common
+    main:                LogDownloader.hs
+    source-dirs:         app/log-downloader
 
 tests:
   mtg-test:
