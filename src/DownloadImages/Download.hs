@@ -50,6 +50,7 @@ import Data.Maybe (fromMaybe)
 import Data.Word (Word8)
 import Debug.Trace (trace)
 import Network.HTTP.Client (Manager, Response (..), httpLbs, parseRequest)
+import Search.Card (collector_number)
 import qualified Search.Card as C (Card (..))
 import qualified Search.CardFace as CF (CardFace (..))
 import Search.ImageURIs (ImageURIs (..))
@@ -225,10 +226,10 @@ downloadFile downloader f = do
     handleLine l =
         let parts = split pipe l
          in if length parts < 2 then pure () else handleCard parts
-    handleCard [n, s] = handleCard [n, s, ""]
+    handleCard [n, s] = handleCard [n, s, "1"]
     handleCard [n, s, idx] = downloadCard downloader n' sCode idx
       where
-        n' = BS.drop 1 $ BS.dropWhile (/= 32) n -- ' ' is ASCII 32
+        n' = BS.drop 1 $ BS.dropWhile (/= space) n
         sCode = maybe "ERROR" sf $ Map.lookup s $ forgeMap downloader
     handleCard _ = pure ()
 downloadDir downloader d =
@@ -250,7 +251,13 @@ downloadCard downloader@Downloader{manager = m} n s idx = do
         Right cs -> downloadCard' downloader c idx''
           where
             c = cs !! idx'
-            idx'' = if length cs == 1 then "" else idx
+            idx'' = if singleton then "" else idx
+            singleton =
+                -- Foil-Only Booster Cards
+                length cs == 1
+                    || ( length cs == 2
+                            && last (collector_number (cs !! 1)) == '★'
+                       )
   where
     q =
         toStrict $
@@ -371,7 +378,7 @@ dlInfo c@C.Card{C.layout = l} idx sm
     front = fromMaybe (error "no faces") $ face 0 c
     back = fromMaybe (error "no faces") $ face 1 c
     imgs = fromMaybe (error "no images") $ C.image_uris c
-    set = C.set c
+    set = map toUpper $ C.set c
     d = unpack $ dir $ fromMaybe defSetInfo $ Map.lookup (pack set) sm
 
 downloadImg :: Manager -> PicsDir -> DLInfo -> IO ()
@@ -385,8 +392,9 @@ downloadImg m pd DLInfo{url = u, setDir = s, filename = n} = do
   where
     s' = map toUpper s
 
-newline, pipe :: Word8
+newline, space, pipe :: Word8
 newline = 10
+space = 32
 pipe = 124
 
 tokenDownload :: Downloader -> ExceptT String IO ()
@@ -418,8 +426,7 @@ tokenInfo m tokenscripts SetInfo{forge = f, sf = s, dir = d} fname = do
             results <-
                 tryE (search m q') -- codespell:ignore trye
                     >>= either
-                        ( const $ -- find any print if it not in that set -- find any print if it not in that set
-                        -- find any print if it not in that set
+                        ( const $
                             tryE (search m q) -- codespell:ignore trye
                                 >>= either
                                     ( \e' ->
