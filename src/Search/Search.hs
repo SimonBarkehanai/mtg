@@ -39,9 +39,9 @@ encodeQueryBuilder q = mconcat $ map encode $ unpack q
       where
         (hi, lo) = c `divMod` 16
     shouldEscape c
-        | c >= 0x41 {- A -} && c <= 0x5A {- Z -} = True
-        | c >= 0x61 {- a -} && c <= 0x7A {- z -} = True
-        | c >= 0x30 {- 0 -} && c <= 0x39 {- 9 -} = True
+        | c >= 0x41 {- A -} && c <= 0x5A {- Z -} = False
+        | c >= 0x61 {- a -} && c <= 0x7A {- z -} = False
+        | c >= 0x30 {- 0 -} && c <= 0x39 {- 9 -} = False
         | otherwise = c `notElem` extraToKeep
     hex x
         | x < 10 = 0x30 {- 0 -} + x
