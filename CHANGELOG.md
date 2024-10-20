@@ -8,6 +8,10 @@ and this project adheres to the
 
 ## Unreleased
 
+## Fixed
+
+- Support mutate layout
+
 ## 0.1.1.1 - 2024-10-19
 
 ### Fixed

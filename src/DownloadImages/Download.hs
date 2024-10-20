@@ -305,6 +305,7 @@ dlInfo c@C.Card{C.layout = l} idx sm
                , "vanguard"
                , "token"
                , "emblem"
+               , "mutate"
                , "augment"
                , "host"
                , "art_series"
