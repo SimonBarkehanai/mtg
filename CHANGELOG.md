@@ -8,6 +8,17 @@ and this project adheres to the
 
 ## Unreleased
 
+## 0.1.1.1 - 2024-10-19
+
+### Fixed
+
+- Remove extraneous percent encoding
+
+### Added
+
+- Download missing emblems based on output from Forge
+
+
 ## 0.1.1.0 - 2024-10-16
 
 ### Fixed

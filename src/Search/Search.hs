@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Search.Search (search) where
+module Search.Search (search, search', defaultRequest) where
 
 import Control.Monad.Trans.Except (ExceptT (..), except, withExceptT)
 import Data.Aeson (
@@ -25,9 +25,9 @@ import Network.HTTP.Client (
     Request (..),
     Response (..),
     brRead,
-    defaultRequest,
     withResponse,
  )
+import qualified Network.HTTP.Client as HTTP (defaultRequest)
 import Search.Card (Card)
 
 encodeQueryBuilder :: ByteString -> Builder
@@ -48,16 +48,24 @@ encodeQueryBuilder q = mconcat $ map encode $ unpack q
         | otherwise = 0x41 {- A -} + x - 10
     extraToKeep = map (fromIntegral . ord) "-_.~"
 
+defaultRequest :: Request
+defaultRequest =
+    HTTP.defaultRequest
+        { host = "api.scryfall.com"
+        , path = "/cards/search"
+        , secure = True
+        , port = 443
+        }
+
 search :: Manager -> ByteString -> ExceptT String IO [Card]
 search manager q = search' manager req
   where
     req =
         defaultRequest
-            { path = "/cards/search"
-            , host = "api.scryfall.com"
-            , queryString = toStrict $ toLazyByteString $ "?q=" <> encodeQueryBuilder q
-            , secure = True
-            , port = 443
+            { queryString =
+                toStrict $
+                    toLazyByteString $
+                        "?q=" <> encodeQueryBuilder q
             }
 
 search' :: Manager -> Request -> ExceptT String IO [Card]
@@ -96,7 +104,11 @@ jsonData (Object o) =
         ( \obj -> do
             object <- obj .: "object"
             code <- obj .:? "code"
-            if (object :: String) == "error" then fail $ "response is error: " ++ fromMaybe "Error" code else obj .: "data"
+            case object :: String of
+                "error" -> fail $ "response is error: " ++ fromMaybe "Error" code
+                "card" -> pure [Object obj]
+                "list" -> obj .: "data"
+                _ -> fail $ "unexpected object: " ++ object
         )
         o
 jsonData _ = Left "Response is not an object"

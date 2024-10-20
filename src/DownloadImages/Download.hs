@@ -9,6 +9,7 @@ module DownloadImages.Download (
     Downloader (manager),
 ) where
 
+import Control.Monad (forM, forM_)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Except (
     ExceptT (..),
@@ -32,17 +33,18 @@ import Data.ByteString as BS (
     split,
     splitAt,
     take,
-    takeWhile,
     toFilePath,
     toStrict,
  )
 import qualified Data.ByteString as BS (
+    concat,
     drop,
     dropWhile,
     isPrefixOf,
     length,
     null,
     readFile,
+    takeWhile,
  )
 import Data.ByteString.Builder (
     byteString,
@@ -60,13 +62,14 @@ import qualified Data.Map as Map (lookup)
 import Data.Maybe (fromMaybe)
 import Data.Word (Word8)
 import Debug.Trace (trace)
-import Network.HTTP.Client (Manager, Response (..), httpLbs, parseRequest)
+import Network.HTTP.Client (Manager, Request (..), Response (..), httpLbs, parseRequest)
 import Search.Card (collector_number)
 import qualified Search.Card as C (Card (..))
 import qualified Search.CardFace as CF (CardFace (..))
 import Search.ImageURIs (ImageURIs (..))
 import Search.Manager (getManager)
-import Search.Search (search)
+import Search.RelatedCard (RelatedCard (RelatedCard, type_line, uri))
+import Search.Search (defaultRequest, search, search')
 import System.Directory (
     createDirectoryIfMissing,
     doesDirectoryExist,
@@ -555,11 +558,23 @@ handleForgeLogLine
                 Just [n, set, i] -> Just (n, set, i)
                 _ -> Nothing
             uncurry3 f (x, y, z) = f x y z
-        handleMissing ('t' : ':' : t) =
-            maybe
-                (pure ())
-                (lift . mapM_ (downloadTok m $ pd </> "tokens") =<<)
-                info
+        handleMissing ('t' : ':' : t)
+            | "emblem_" `isPrefixOf` t = do
+                cards <- search m emblemSearch
+                emblems <-
+                    concat
+                        <$> forM
+                            cards
+                            ( \C.Card{C.all_parts = p} ->
+                                let u = foldr (\RelatedCard{type_line = tl, uri = new} old -> if "Emblem" `isPrefixOf` tl then Just $ pack new else old) Nothing =<< p
+                                 in maybe (pure []) (\u' -> search' m defaultRequest{path = BS.drop 24 u'}) u
+                            )
+                forM_ emblems (lift . downloadTok m (pd </> "tokens") . emblemInfo)
+            | otherwise =
+                maybe
+                    (pure ())
+                    (lift . mapM_ (downloadTok m $ pd </> "tokens") =<<)
+                    info
           where
             t' = pack t
             pos = elemIndexEnd underscore t'
@@ -568,6 +583,39 @@ handleForgeLogLine
             set' = BS.takeWhile (/= space) . BS.drop 1 <$> set
             si = flip Map.lookup fm . C8BS.map toUpper =<< set'
             info = tokenInfo m tokenscripts <$> si <*> fname'
+
+            emblemName = BS.takeWhile (/= space) $ BS.drop 7 t'
+            emblemParts = BS.split underscore emblemName
+            emblemMaybeSet = Map.lookup (C8BS.map toUpper $ last emblemParts) fm
+            emblemSearch =
+                toStrict $
+                    toLazyByteString $
+                        maybe
+                            ("!\"" <> byteString (BS.concat emblemParts) <> "\"")
+                            ( \st ->
+                                "!\""
+                                    <> byteString (BS.concat $ init emblemParts)
+                                    <> "\" s:\""
+                                    <> byteString (sf st)
+                                    <> "\""
+                            )
+                            emblemMaybeSet
+            emblemInfo c@C.Card{} =
+                DLInfo
+                    { url =
+                        png
+                            $ fromMaybe
+                                (error $ "no images: " ++ show c)
+                            $ C.image_uris c
+                    , setDir = ""
+                    , filename =
+                        toStrict $
+                            toLazyByteString $
+                            "emblem_"<>
+                                byteString emblemName
+                                    <> ".png"
+                    }
+
             functorUnzip xs = (fst <$> xs, snd <$> xs)
             tokenscripts = fd </> "res" </> "tokenscripts"
         handleMissing _ = pure ()
