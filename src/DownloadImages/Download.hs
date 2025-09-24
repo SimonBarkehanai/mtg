@@ -401,11 +401,13 @@ downloadImg m pd DLInfo{url = u, setDir = s, filename = n} = do
     req <- parseRequest u
     res <- httpLbs req m
     n' <- toFilePath n
-    let d = pd </> s'
+    let s' = map toUpper s
+        d = pd </> s'
+        p = d </> unpack n
     createDirectoryIfMissing True d
-    LBS.writeFile (d </> n') $ responseBody res
-  where
-    s' = map toUpper s
+    putStrLn $ "writing to " ++ p
+    LBS.writeFile p $ responseBody res
+
 
 newline, space, underscore, pipe :: Word8
 newline = 10
@@ -421,14 +423,17 @@ tokenDownload
         , manager = m
         , tokens = tkns
         } =
-        mapM (uncurry $ tokenInfo m tokenscripts) tkns
+        mapM handleLine tkns
             >>= (\x -> lift (print x) >> pure x)
-            >>= (lift . mapM_ (downloadTok m $ pd </> "tokens")) . concat
+            >>= (lift . mapM_ (downloadImg m $ pd </> "tokens")) . concat
       where
         tokenscripts = fDir </> "res" </> "tokenscripts"
+        handleLine (s, l) = tokenInfo m tokenscripts s fname num
+            where
+                (num:fname:_) = BS.split space l
 
-tokenInfo :: Manager -> FilePath -> SetInfo -> ByteString -> ExceptT String IO [DLInfo]
-tokenInfo m tokenscripts SetInfo{forge = f, sf = s, dir = d} fname = do
+tokenInfo :: Manager -> FilePath -> SetInfo -> ByteString -> ByteString -> ExceptT String IO [DLInfo]
+tokenInfo m tokenscripts SetInfo{forge = f, sf = s, dir = d} fname num = do
     fname' <- lift $ toFilePath fname
     let file = tokenscripts </> fname' ++ ".txt"
     exists <- lift $ doesFileExist file
@@ -463,10 +468,9 @@ tokenInfo m tokenscripts SetInfo{forge = f, sf = s, dir = d} fname = do
         put $ succ i
         let idx = if i == 0 then "" else intDec $ succ i
             builder =
-                byteString fname
-                    <> idx
+                byteString num
                     <> "_"
-                    <> byteString (C8BS.map toLower f)
+                    <> byteString fname
                     <> ".png"
         case l of
             "token" ->
@@ -481,54 +485,13 @@ tokenInfo m tokenscripts SetInfo{forge = f, sf = s, dir = d} fname = do
                         , filename = toStrict $ toLazyByteString builder
                         }
                     ]
-            "double_faced_token" ->
-                pure
-                    [ DLInfo
-                        { url =
-                            png $
-                                fromMaybe (error $ "no images: " ++ show c) $
-                                    CF.image_uris front
-                        , setDir = unpack d
-                        , filename =
-                            toStrict $
-                                toLazyByteString $
-                                    byteString fname
-                                        <> idx
-                                        <> "_"
-                                        <> byteString (C8BS.map toLower f)
-                                        <> ".png"
-                        }
-                    , DLInfo
-                        { url =
-                            png $
-                                fromMaybe (error $ "no images: " ++ show c) $
-                                    CF.image_uris back
-                        , setDir = unpack d
-                        , filename =
-                            toStrict $
-                                toLazyByteString $
-                                    byteString fname
-                                        <> idx
-                                        <> "_"
-                                        <> byteString (C8BS.map toLower f)
-                                        <> ".png"
-                        }
-                    ]
+            "double_faced_token" -> trace ("Handle double_faced_token layout (" ++ n ++ ")") $ pure []
             "flip" -> trace ("Handle flip layout (" ++ n ++ ")") $ pure []
             _ -> lift $ Left $ "unknown layout: " ++ l ++ " (" ++ show c ++ ")"
       where
         front = fromMaybe (error "no faces") $ face 0 c
         back = fromMaybe (error "no faces") $ face 1 c
     removeSuffix suf x = fromMaybe x $ stripSuffix suf x
-
-downloadTok :: Manager -> PicsDir -> DLInfo -> IO ()
-downloadTok m pd DLInfo{url = u, filename = n} = do
-    req <- parseRequest u
-    res <- httpLbs req m
-    n' <- toFilePath n
-    createDirectoryIfMissing True pd
-    putStrLn $ "writing to " ++ pd </> n'
-    LBS.writeFile (pd </> n') $ responseBody res
 
 handleForgeLogLine :: Downloader -> String -> ExceptT String IO ()
 handleForgeLogLine
@@ -570,50 +533,51 @@ handleForgeLogLine
                                 let u = foldr (\RelatedCard{type_line = tl, uri = new} old -> if "Emblem" `isPrefixOf` tl then Just $ pack new else old) Nothing =<< p
                                  in maybe (pure []) (\u' -> search' m defaultRequest{path = BS.drop 24 u'}) u
                             )
-                forM_ emblems (lift . downloadTok m (pd </> "tokens") . emblemInfo)
+                forM_ emblems (lift . downloadImg m (pd </> "tokens") . emblemInfo)
             | otherwise =
                 maybe
                     (pure ())
-                    (lift . mapM_ (downloadTok m $ pd </> "tokens") =<<)
+                    (lift . mapM_ (downloadImg m $ pd </> "tokens") =<<)
                     info
           where
             t' = pack t
-            pos = elemIndexEnd underscore t'
-            (fname, set) = functorUnzip (flip BS.splitAt t' <$> pos)
-            fname' = C8BS.dropWhileEnd isDigit <$> fname
-            set' = BS.takeWhile (/= space) . BS.drop 1 <$> set
-            si = flip Map.lookup fm . C8BS.map toUpper =<< set'
-            info = tokenInfo m tokenscripts <$> si <*> fname'
+            info = do
+                pos <- elemIndex pipe t'
+                let (fname, set) = flip BS.splitAt t' pos
+                    fname' = C8BS.dropWhileEnd isDigit fname
+                    (set':num:_) = BS.split pipe $ BS.drop 1 set
+                si <- flip Map.lookup fm $ C8BS.map toUpper set'
+                pure $ tokenInfo m tokenscripts si fname' num
 
             emblemName = BS.takeWhile (/= space) $ BS.drop 7 t'
-            emblemParts = BS.split underscore emblemName
-            emblemMaybeSet = Map.lookup (C8BS.map toUpper $ last emblemParts) fm
+            (name:set:num:_) = BS.split pipe emblemName
+            emblemMaybeSet = Map.lookup (C8BS.map toUpper $ set) fm
             emblemSearch =
                 toStrict $
                     toLazyByteString $
                         maybe
-                            ("!\"" <> byteString (BS.concat emblemParts) <> "\"")
+                            ("!\"" <> byteString name <> "\"")
                             ( \st ->
                                 "!\""
-                                    <> byteString (BS.concat $ init emblemParts)
+                                    <> byteString name
                                     <> "\" s:\""
                                     <> byteString (sf st)
                                     <> "\""
                             )
                             emblemMaybeSet
-            emblemInfo c@C.Card{} =
+            emblemInfo c =
                 DLInfo
                     { url =
                         png
                             $ fromMaybe
                                 (error $ "no images: " ++ show c)
                             $ C.image_uris c
-                    , setDir = ""
+                    , setDir = unpack set
                     , filename =
                         toStrict $
                             toLazyByteString $
-                            "emblem_"<>
-                                byteString emblemName
+                            "emblem_" <>
+                                byteString name
                                     <> ".png"
                     }
 
